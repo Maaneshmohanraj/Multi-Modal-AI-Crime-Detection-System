@@ -1,0 +1,207 @@
+# Directory Structure:
+# /crime_detection/
+#   ├── models/
+#   │   ├── weapon_detector.py
+#   │   ├── behavior_analyzer.py
+#   │   └── feature_extractor.py
+#   ├── backend/
+#   │   ├── app.py
+#   │   └── database.py
+#   ├── web/
+#   │   ├── index.html
+#   │   └── app.js
+#   └── requirements.txt
+
+# models/weapon_detector.py
+import torch
+from ultralytics import YOLO
+
+class WeaponDetector:
+    def __init__(self):
+        self.model = YOLO('yolov8n.pt')  # or custom trained model
+        self.confidence_threshold = 0.5
+        self.weapon_classes = ['knife', 'gun', 'rifle']  # customize based on your model
+
+    def detect(self, frame):
+        results = self.model(frame)
+        detections = []
+        
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                if box.cls in self.weapon_classes and box.conf > self.confidence_threshold:
+                    detections.append({
+                        'class': self.weapon_classes[int(box.cls)],
+                        'confidence': float(box.conf),
+                        'bbox': box.xyxy[0].tolist()
+                    })
+        return detections
+
+# models/behavior_analyzer.py
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import cv2
+import numpy as np
+
+class BehaviorCNN(nn.Module):
+    def __init__(self, num_classes=5):  # 5 different behavior types
+        super(BehaviorCNN, self).__init__()
+        self.base_model = models.resnet50(pretrained=True)
+        num_features = self.base_model.fc.in_features
+        self.base_model.fc = nn.Sequential(
+            nn.Linear(num_features, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_classes)
+        )
+        
+    def forward(self, x):
+        return self.base_model(x)
+
+class BehaviorAnalyzer:
+    def __init__(self):
+        self.model = BehaviorCNN()
+        self.model.eval()
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                              std=[0.229, 0.224, 0.225])
+        ])
+        
+    def analyze(self, frame):
+        frame_tensor = self.transform(frame).unsqueeze(0)
+        with torch.no_grad():
+            output = self.model(frame_tensor)
+            probabilities = torch.softmax(output, dim=1)
+            behavior_class = torch.argmax(probabilities).item()
+        return behavior_class
+
+# models/feature_extractor.py
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+
+class FeatureExtractor:
+    def __init__(self):
+        self.model = models.densenet121(pretrained=True)
+        self.model = nn.Sequential(*list(self.model.children())[:-1])
+        self.model.eval()
+        
+    def extract_features(self, frame):
+        transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                              std=[0.229, 0.224, 0.225])
+        ])
+        
+        frame_tensor = transform(frame).unsqueeze(0)
+        with torch.no_grad():
+            features = self.model(frame_tensor)
+        return features.squeeze()
+
+# backend/database.py
+from pymongo import MongoClient
+from datetime import datetime
+
+class Database:
+    def __init__(self):
+        self.client = MongoClient('mongodb://localhost:27017/')
+        self.db = self.client['crime_detection']
+        self.incidents = self.db['incidents']
+        
+    def log_incident(self, incident_type, confidence, location, image_path):
+        incident = {
+            'type': incident_type,
+            'confidence': confidence,
+            'location': location,
+            'image_path': image_path,
+            'timestamp': datetime.utcnow(),
+            'status': 'new'
+        }
+        return self.incidents.insert_one(incident)
+        
+    def get_incidents(self, status=None):
+        query = {'status': status} if status else {}
+        return list(self.incidents.find(query))
+
+# backend/app.py
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO
+from flask_cors import CORS
+import cv2
+import numpy as np
+from models.weapon_detector import WeaponDetector
+from models.behavior_analyzer import BehaviorAnalyzer
+from models.feature_extractor import FeatureExtractor
+from database import Database
+
+app = Flask(__name__)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+weapon_detector = WeaponDetector()
+behavior_analyzer = BehaviorAnalyzer()
+feature_extractor = FeatureExtractor()
+db = Database()
+
+def process_frame(frame):
+    # Weapon detection
+    weapon_detections = weapon_detector.detect(frame)
+    
+    # Behavior analysis
+    behavior = behavior_analyzer.analyze(frame)
+    
+    # Feature extraction
+    features = feature_extractor.extract_features(frame)
+    
+    return {
+        'weapons': weapon_detections,
+        'behavior': behavior,
+        'features': features.tolist()
+    }
+
+@app.route('/api/process-stream', methods=['POST'])
+def process_stream():
+    if 'frame' not in request.files:
+        return jsonify({'error': 'No frame provided'}), 400
+        
+    frame_file = request.files['frame']
+    frame_array = np.frombuffer(frame_file.read(), np.uint8)
+    frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+    
+    results = process_frame(frame)
+    
+    # Check for incidents
+    if results['weapons'] or results['behavior'] >= 0.8:  # threshold for suspicious behavior
+        incident_id = db.log_incident(
+            incident_type='weapon_detected' if results['weapons'] else 'suspicious_behavior',
+            confidence=max([d['confidence'] for d in results['weapons']] + [results['behavior']]),
+            location=request.form.get('location', 'unknown'),
+            image_path=f'incidents/{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.jpg'
+        )
+        
+        # Save frame
+        cv2.imwrite(f'static/{incident_id}.jpg', frame)
+        
+        # Emit alert to all connected clients
+        socketio.emit('incident_alert', {
+            'incident_id': str(incident_id),
+            'type': 'weapon_detected' if results['weapons'] else 'suspicious_behavior',
+            'timestamp': datetime.utcnow().isoformat()
+        })
+    
+    return jsonify(results)
+
+@app.route('/api/incidents', methods=['GET'])
+def get_incidents():
+    status = request.args.get('status')
+    incidents = db.get_incidents(status)
+    return jsonify(incidents)
+
+if __name__ == '__main__':
+    socketio.run(app, debug=True)
