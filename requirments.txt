@@ -1,0 +1,61 @@
+# Core ML/AI
+torch>=2.2.0
+torchvision>=0.17.0
+ultralytics>=9.0.0  # for YOLOv9
+transformers>=4.37.0
+openai>=1.12.0
+whisper>=1.0.0
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+graphql-core>=3.2.3
+strawberry-graphql>=0.219.0
+
+# Database
+redis>=5.0.1
+pinecone-client>=3.0.0
+pymongo>=4.6.1
+
+# Image Processing
+opencv-python>=4.9.0
+pillow>=10.2.0
+numpy>=1.26.0
+
+# Utils
+python-dotenv>=1.0.0
+typing-extensions>=4.9.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+.\venv\Scripts\activate
+# On Linux/Mac:
+source venv/bin/activate
+
+# Install requirements
+pip install -r requirements.txt
+
+{
+    "python.defaultInterpreterPath": "./venv/bin/python",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.formatting.provider": "black",
+    "editor.formatOnSave": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "[python]": {
+        "editor.rulers": [88],
+        "editor.tabSize": 4
+    }
+}
+
+# Install development tools
+pip install black pylint pytest
+
+# Install Jupyter support (optional)
+pip install jupyter ipykernel
+
