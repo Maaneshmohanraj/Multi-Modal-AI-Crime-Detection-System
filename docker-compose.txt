@@ -1,0 +1,74 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+    depends_on:
+      - redis
+      - pinecone
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:8000
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  pinecone:
+    image: pinecone/pinecone-cli
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+
+# k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crime-detection
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: crime-detection
+  template:
+    metadata:
+      labels:
+        app: crime-detection
+    spec:
+      containers:
+      - name: backend
+        image: crime-detection-backend:latest
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: openai
+      - name: frontend
+        image: crime-detection-frontend:latest
+        ports:
+        - containerPort: 3000
